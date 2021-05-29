@@ -14,7 +14,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
     def __init__(
         self,
         width=9,
-        height=15,
+        height=9,
         agent_start_pos=np.array((1, 1)),
         agent_start_dir=0,
         strip2_row=2,
