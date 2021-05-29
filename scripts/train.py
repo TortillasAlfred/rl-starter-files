@@ -117,6 +117,9 @@ parser.add_argument(
     default=False,
     help="add a GRU to the model to handle text input",
 )
+parser.add_argument(
+    "--delta", type=float, default=0.05, help="env stochasticity (default: 0.05)"
+)
 
 args = parser.parse_args()
 
@@ -156,7 +159,7 @@ envs = []
 for i in range(args.procs):
     # Overrode the old flexible env loading to only load our stochastic env
     # envs.append(utils.make_env(args.env, args.seed + 10000 * i))
-    envs.append(utils.get_stochastic_env(seed=args.seed + 10000 * i))
+    envs.append(utils.get_stochastic_env(seed=args.seed + 10000 * i, delta=args.delta))
 txt_logger.info("Environments loaded\n")
 
 # Load training status

@@ -5,6 +5,7 @@ from torch_ac.utils.penv import ParallelEnv
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+from os.path import join
 import utils
 
 
@@ -42,6 +43,10 @@ parser.add_argument(
 parser.add_argument(
     "--text", action="store_true", default=False, help="add a GRU to the model"
 )
+parser.add_argument(
+    "--delta", type=float, default=0.05, help="env stochasticity (default: 0.05)"
+)
+
 args = parser.parse_args()
 
 # Set seed for all randomness sources
@@ -59,7 +64,7 @@ envs = []
 for i in range(args.procs):
     # Overrode the old flexible env loading to only load our stochastic env
     # envs.append(utils.make_env(args.env, args.seed + 10000 * i))
-    envs.append(utils.get_stochastic_env(seed=args.seed + 10000 * i))
+    envs.append(utils.get_stochastic_env(seed=args.seed + 10000 * i, delta=args.delta))
 env = ParallelEnv(envs)
 print("Environments loaded\n")
 
@@ -179,9 +184,12 @@ while not done:
 
 # CDF
 plot = sns.ecdfplot(data=logs["return_per_episode"])
-plot.set(xlim=(0, 1))
-plt.show()
+plot.set(xlim=(0, 1), title="Returns CDF", xlabel="Percentile", ylabel="Return")
+plt.savefig(join(model_dir, "cdf.png"))
+plt.close()
 
 # PDF
-sns.kdeplot(logs["return_per_episode"], fill=True, alpha=0.5)
-plt.show()
+plot = sns.kdeplot(logs["return_per_episode"], fill=True, alpha=0.5)
+plot.set(title="Return Distribution", xlabel="Return")
+plt.savefig(join(model_dir, "pdf.png"))
+plt.close()
