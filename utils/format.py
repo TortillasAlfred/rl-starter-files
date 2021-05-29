@@ -15,24 +15,59 @@ def get_obss_preprocessor(obs_space):
         obs_space = {"image": obs_space.shape}
 
         def preprocess_obss(obss, device=None):
-            return torch_ac.DictList({
-                "image": preprocess_images(obss, device=device)
-            })
+            return torch_ac.DictList(
+                {
+                    "image": preprocess_images(obss, device=device),
+                    "transition_probas": preprocess_transitions(obss, device=device),
+                }
+            )
 
     # Check if it is a MiniGrid observation space
-    elif isinstance(obs_space, gym.spaces.Dict) and list(obs_space.spaces.keys()) == ["image"]:
+    elif isinstance(obs_space, gym.spaces.Dict) and list(obs_space.spaces.keys()) == [
+        "image"
+    ]:
         obs_space = {"image": obs_space.spaces["image"].shape, "text": 100}
 
-        vocab = Vocabulary(obs_space["text"])
         def preprocess_obss(obss, device=None):
-            return torch_ac.DictList({
-                "image": preprocess_images([obs["image"] for obs in obss], device=device),
-                "text": preprocess_texts([obs["mission"] for obs in obss], vocab, device=device)
-            })
-        preprocess_obss.vocab = vocab
+            return torch_ac.DictList(
+                {
+                    "image": preprocess_images(
+                        [obs["image"] for obs in obss], device=device
+                    ),
+                    "transition_probas": preprocess_transitions(
+                        [obs["transition_probas"] for obs in obss], device=device
+                    ),
+                }
+            )
 
     else:
         raise ValueError("Unknown observation space: " + str(obs_space))
+
+    return obs_space, preprocess_obss
+
+
+def get_policy_obss_prepocessor(obs_space):
+    obs_space = {"image": obs_space.spaces["image"].shape, "text": 100}
+
+    def preprocess_obss(obss, device=None):
+        return torch_ac.DictList(
+            {"image": preprocess_images([obs["image"] for obs in obss], device=device)}
+        )
+
+    return obs_space, preprocess_obss
+
+
+def get_adversary_obss_preprocessor(obs_space):
+    obs_space = {"image": obs_space.spaces["image"].shape, "text": 100}
+
+    def preprocess_obss(obss, device=None):
+        return torch_ac.DictList(
+            {
+                "transition_probas": preprocess_transitions(
+                    [obs["transition_probas"] for obs in obss], device=device
+                ),
+            }
+        )
 
     return obs_space, preprocess_obss
 
@@ -41,6 +76,13 @@ def preprocess_images(images, device=None):
     # Bug of Pytorch: very slow if not first converted to numpy array
     images = numpy.array(images)
     return torch.tensor(images, device=device, dtype=torch.float)
+
+
+def preprocess_transitions(transitions, device=None):
+    transitions = torch.stack(transitions)
+    transitions = transitions.to(device).type(dtype=torch.float)
+
+    return transitions
 
 
 def preprocess_texts(texts, vocab, device=None):
@@ -56,7 +98,7 @@ def preprocess_texts(texts, vocab, device=None):
     indexed_texts = numpy.zeros((len(texts), max_text_len))
 
     for i, indexed_text in enumerate(var_indexed_texts):
-        indexed_texts[i, :len(indexed_text)] = indexed_text
+        indexed_texts[i, : len(indexed_text)] = indexed_text
 
     return torch.tensor(indexed_texts, device=device, dtype=torch.long)
 

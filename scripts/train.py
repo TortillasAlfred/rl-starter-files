@@ -7,7 +7,8 @@ import tensorboardX
 import sys
 
 import utils
-from model import ACModel
+from model import ACModel, AdversaryACModel
+import numpy as np
 
 
 # Parse arguments
@@ -15,9 +16,6 @@ from model import ACModel
 parser = argparse.ArgumentParser()
 
 ## General parameters
-parser.add_argument(
-    "--algo", required=True, help="algorithm to use: a2c | ppo (REQUIRED)"
-)
 parser.add_argument(
     "--model", default=None, help="name of the model (default: {ENV}_{ALGO}_{TIME})"
 )
@@ -49,12 +47,12 @@ parser.add_argument(
     "--epochs", type=int, default=4, help="number of epochs for PPO (default: 4)"
 )
 parser.add_argument(
-    "--batch-size", type=int, default=256, help="batch size for PPO (default: 256)"
+    "--batch-size", type=int, default=512, help="batch size for PPO (default: 512)"
 )
 parser.add_argument(
     "--frames-per-proc",
     type=int,
-    default=None,
+    default=256,
     help="number of frames per process before update (default: 5 for A2C and 128 for PPO)",
 )
 parser.add_argument(
@@ -120,6 +118,12 @@ parser.add_argument(
 parser.add_argument(
     "--delta", type=float, default=0.05, help="env stochasticity (default: 0.05)"
 )
+parser.add_argument(
+    "--target_quantile",
+    type=float,
+    default=0.1,
+    help="target CVaR quantile (default: 0.1)",
+)
 
 args = parser.parse_args()
 
@@ -127,8 +131,10 @@ args.mem = args.recurrence > 1
 
 # Set run dir
 
+np.seterr(all="ignore")
+
 date = datetime.datetime.now().strftime("%y-%m-%d-%H-%M-%S")
-default_model_name = f"{args.algo}_seed{args.seed}_{date}"
+default_model_name = f"seed{args.seed}_{date}"
 
 model_name = args.model or default_model_name
 model_dir = utils.get_model_dir(model_name)
@@ -159,7 +165,11 @@ envs = []
 for i in range(args.procs):
     # Overrode the old flexible env loading to only load our stochastic env
     # envs.append(utils.make_env(args.env, args.seed + 10000 * i))
-    envs.append(utils.get_stochastic_env(seed=args.seed + 10000 * i, delta=args.delta))
+    envs.append(
+        utils.get_stochastic_fixed_adversary_env(
+            1.0 / args.target_quantile, seed=args.seed + 10000 * i, delta=args.delta
+        )
+    )
 txt_logger.info("Environments loaded\n")
 
 # Load training status
@@ -172,63 +182,62 @@ txt_logger.info("Training status loaded\n")
 
 # Load observations preprocessor
 
-obs_space, preprocess_obss = utils.get_obss_preprocessor(envs[0].observation_space)
+obs_space, preprocess_obss = utils.get_policy_obss_prepocessor(
+    envs[0].observation_space
+)
 if "vocab" in status:
     preprocess_obss.vocab.load_vocab(status["vocab"])
 txt_logger.info("Observations preprocessor loaded")
 
 # Load model
 
-acmodel = ACModel(obs_space, envs[0].action_space, args.mem, args.text)
+policy_acmodel = ACModel(obs_space, envs[0].action_space, args.mem, args.text)
+
 if "model_state" in status:
-    acmodel.load_state_dict(status["model_state"])
-acmodel.to(device)
-txt_logger.info("Model loaded\n")
-txt_logger.info("{}\n".format(acmodel))
+    policy_acmodel.load_state_dict(status["model_state"])
+policy_acmodel.to(device)
+txt_logger.info("Policy model loaded\n")
+txt_logger.info("{}\n".format(policy_acmodel))
+
+adversary_acmodel = AdversaryACModel(envs[0])
+adversary_acmodel.to(device)
+txt_logger.info("Adversary model loaded\n")
+txt_logger.info("{}\n".format(adversary_acmodel))
+adversary_agent = utils.AdversaryAgent(
+    adversary_acmodel,
+    envs[0],
+    model_dir,
+    device=device,
+    num_envs=args.procs,
+    pretrained=False,
+)
+
+for env in envs:
+    env.adversary = adversary_agent  # Link model parameters
 
 # Load algo
 
-if args.algo == "a2c":
-    algo = torch_ac.A2CAlgo(
-        envs,
-        acmodel,
-        device,
-        args.frames_per_proc,
-        args.discount,
-        args.lr,
-        args.gae_lambda,
-        args.entropy_coef,
-        args.value_loss_coef,
-        args.max_grad_norm,
-        args.recurrence,
-        args.optim_alpha,
-        args.optim_eps,
-        preprocess_obss,
-    )
-elif args.algo == "ppo":
-    algo = torch_ac.PPOAlgo(
-        envs,
-        acmodel,
-        device,
-        args.frames_per_proc,
-        args.discount,
-        args.lr,
-        args.gae_lambda,
-        args.entropy_coef,
-        args.value_loss_coef,
-        args.max_grad_norm,
-        args.recurrence,
-        args.optim_eps,
-        args.clip_eps,
-        args.epochs,
-        args.batch_size,
-        preprocess_obss,
-    )
-else:
-    raise ValueError("Incorrect algorithm name: {}".format(args.algo))
+policy_algo = torch_ac.PPOAlgo(
+    envs,
+    policy_acmodel,
+    device,
+    args.frames_per_proc,
+    args.discount,
+    args.lr,
+    args.gae_lambda,
+    args.entropy_coef,
+    args.value_loss_coef,
+    args.max_grad_norm,
+    args.recurrence,
+    args.optim_eps,
+    args.clip_eps,
+    args.epochs,
+    args.batch_size,
+    preprocess_obss,
+)
 
 if "optimizer_state" in status:
-    algo.optimizer.load_state_dict(status["optimizer_state"])
+    policy_algo.optimizer.load_state_dict(status["optimizer_state"])
 txt_logger.info("Optimizer loaded\n")
 
 # Train model
@@ -241,8 +250,8 @@ while num_frames < args.frames:
     # Update model parameters
 
     update_start_time = time.time()
-    exps, logs1 = algo.collect_experiences()
-    logs2 = algo.update_parameters(exps)
+    exps, logs1 = policy_algo.collect_experiences()
+    logs2 = policy_algo.update_parameters(exps)
     logs = {**logs1, **logs2}
     update_end_time = time.time()
 
@@ -296,8 +305,8 @@ while num_frames < args.frames:
         status = {
             "num_frames": num_frames,
             "update": update,
-            "model_state": acmodel.state_dict(),
-            "optimizer_state": algo.optimizer.state_dict(),
+            "model_state": policy_acmodel.state_dict(),
+            "optimizer_state": policy_algo.optimizer.state_dict(),
         }
         if hasattr(preprocess_obss, "vocab"):
             status["vocab"] = preprocess_obss.vocab.vocab

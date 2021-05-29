@@ -1,26 +1,34 @@
+from utils.env import StochasticDistShiftEnv
+
 import gym
 import gym_minigrid
 
 from gym_minigrid.minigrid import *
-from gym_minigrid.envs import DistShiftEnv
 import numpy as np
+import torch
 
 
-class StochasticDistShiftEnv(DistShiftEnv):
+class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
     """
-    Stochastic Distributional shift environment.
+    Stochastic Distributional shift environment with fixed adversary.
     """
 
     def __init__(
         self,
+        adversary_budget,
         width=9,
         height=9,
         agent_start_pos=np.array((1, 1)),
         agent_start_dir=0,
         strip2_row=2,
         delta=0.05,  # Random proba
+        eps=1e-6,
     ):
+        self.adversary = None  # Initialized later on
         self.delta = delta
+        self.adversary_budget = adversary_budget
+        self.remaining_budget = self.adversary_budget
+        self.eps = eps
 
         super().__init__(
             width=width,
@@ -30,7 +38,9 @@ class StochasticDistShiftEnv(DistShiftEnv):
             strip2_row=strip2_row,
         )
 
-    def _move_up(self):
+    def _fall_event(self):
+        next_pos = self.agent_pos
+        next_dir = self.agent_dir
         reward = 0
         done = False
 
@@ -43,76 +53,160 @@ class StochasticDistShiftEnv(DistShiftEnv):
         up_cell = self.grid.get(*up_pos)
 
         if up_cell == None or up_cell.can_overlap():
-            self.agent_pos = up_pos
+            next_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
             reward = self._reward()
         if up_cell != None and up_cell.type == "lava":
             done = True
 
-        return reward, done
+        return next_pos, next_dir, reward, done
+
+    def _normal_event(self, action):
+        next_pos = self.agent_pos
+        next_dir = self.agent_dir
+        reward = 0
+        done = False
+
+        # Get the position in front of the agent
+        fwd_pos = self.front_pos
+
+        # Get the contents of the cell in front of the agent
+        fwd_cell = self.grid.get(*fwd_pos)
+
+        # Rotate left
+        if action == self.actions.left:
+            next_dir -= 1
+            if next_dir < 0:
+                next_dir += 4
+
+        # Rotate right
+        elif action == self.actions.right:
+            next_dir = (next_dir + 1) % 4
+
+        # Move forward
+        elif action == self.actions.forward:
+            if fwd_cell == None or fwd_cell.can_overlap():
+                next_pos = fwd_pos
+            if fwd_cell != None and fwd_cell.type == "goal":
+                done = True
+                reward = self._reward()
+            if fwd_cell != None and fwd_cell.type == "lava":
+                done = True
+
+        else:
+            assert False, "unknown action"
+
+        return (next_pos, next_dir, reward, done)
+
+    def _get_transition_probas(self, action):
+        fall_state = self._fall_event()
+        normal_state = self._normal_event(action)
+
+        if (fall_state[0] == normal_state[0]).all() and fall_state[1] == normal_state[
+            1
+        ]:
+            return [normal_state], [1.0]
+        else:
+            return [fall_state, normal_state], [self.delta, 1.0 - self.delta]
+
+    def _get_state_index(self, state):
+        (x, y), direction, _, _ = state
+
+        index = 0
+
+        index += x * self.grid.height * 4
+        index += y * 4
+        index += direction
+
+        return index
+
+    @property
+    def device(self):
+        return self.adversary.device
+
+    @property
+    def state_size(self):
+        return self.grid.width * self.grid.height * 4
+
+    def _preprocess_transitions(self, states, probas):
+        torch_probas = torch.zeros(
+            (self.state_size + 1,), dtype=float, device=self.device
+        )
+
+        for state, proba in zip(states, probas):
+            state_idx = self._get_state_index(state)
+            torch_probas[state_idx] = proba
+
+        torch_probas[-1] = self.remaining_budget
+
+        return torch_probas
+
+    def _postprocess_transitions(self, perturbed_transitions, adv_obs):
+        perturbed_transitions /= perturbed_transitions.sum()
+        perturbations = (
+            perturbed_transitions / adv_obs["transition_probas"][:-1].cpu().numpy()
+        )
+        perturbations = np.nan_to_num(perturbations, nan=1)
+        perturbations = perturbations[perturbed_transitions > 0].tolist()
+
+        perturbed_transitions = perturbed_transitions[
+            perturbed_transitions > 0
+        ].tolist()
+
+        for i in range(len(perturbed_transitions)):
+            perturbed_transitions[i] /= sum(perturbed_transitions)
+
+        return perturbed_transitions, perturbations
+
+    def _get_adversarial_perturbation(self, states, probas):
+        adv_obs = self.gen_adv_obs(states, probas)
+        with torch.no_grad():
+            perturbed_transitions = self.adversary.get_new_proba(adv_obs)
+
+        # Ensure adversary budget is respected
+        perturbations = (
+            perturbed_transitions / adv_obs["transition_probas"][:-1].cpu().numpy()
+        )
+        perturbations = np.nan_to_num(perturbations, nan=1)
+        max_perturbation = perturbations.max()
+
+        if max_perturbation > self.remaining_budget:
+            if self.remaining_budget > 1 + self.eps:
+                perturbations = (
+                    max_perturbation
+                    - self.remaining_budget
+                    + (self.remaining_budget - 1) * perturbations
+                ) / (max_perturbation - 1)
+                perturbed_transitions = (
+                    adv_obs["transition_probas"][:-1].cpu().numpy() * perturbations
+                )
+            else:
+                perturbed_transitions = adv_obs["transition_probas"][:-1].cpu().numpy()
+
+        # Cast back into the list format
+        perturbed_transitions, perturbations = self._postprocess_transitions(
+            perturbed_transitions, adv_obs
+        )
+
+        return perturbed_transitions, perturbations
 
     def step(self, action):
         self.step_count += 1
 
-        if self._rand_float(0, 1) < self.delta:
-            reward, done = self._move_up()
-        else:
-            reward = 0
-            done = False
+        states, probas = self._get_transition_probas(action)
 
-            # Get the position in front of the agent
-            fwd_pos = self.front_pos
+        perturbed_probas, perturbations = self._get_adversarial_perturbation(
+            states, probas
+        )
 
-            # Get the contents of the cell in front of the agent
-            fwd_cell = self.grid.get(*fwd_pos)
+        sampled_idx = np.random.choice(len(perturbed_probas), p=perturbed_probas)
+        next_pos, next_dir, reward, done = states[sampled_idx]
+        perturbation_applied = perturbations[sampled_idx]
+        self.remaining_budget /= perturbation_applied
 
-            # Rotate left
-            if action == self.actions.left:
-                self.agent_dir -= 1
-                if self.agent_dir < 0:
-                    self.agent_dir += 4
-
-            # Rotate right
-            elif action == self.actions.right:
-                self.agent_dir = (self.agent_dir + 1) % 4
-
-            # Move forward
-            elif action == self.actions.forward:
-                if fwd_cell == None or fwd_cell.can_overlap():
-                    self.agent_pos = fwd_pos
-                if fwd_cell != None and fwd_cell.type == "goal":
-                    done = True
-                    reward = self._reward()
-                if fwd_cell != None and fwd_cell.type == "lava":
-                    done = True
-
-            # Pick up an object
-            elif action == self.actions.pickup:
-                if fwd_cell and fwd_cell.can_pickup():
-                    if self.carrying is None:
-                        self.carrying = fwd_cell
-                        self.carrying.cur_pos = np.array([-1, -1])
-                        self.grid.set(*fwd_pos, None)
-
-            # Drop an object
-            elif action == self.actions.drop:
-                if not fwd_cell and self.carrying:
-                    self.grid.set(*fwd_pos, self.carrying)
-                    self.carrying.cur_pos = fwd_pos
-                    self.carrying = None
-
-            # Toggle/activate an object
-            elif action == self.actions.toggle:
-                if fwd_cell:
-                    fwd_cell.toggle(self, fwd_pos)
-
-            # Done action (not used by default)
-            elif action == self.actions.done:
-                pass
-
-            else:
-                assert False, "unknown action"
+        self.agent_pos = next_pos
+        self.agent_dir = next_dir
 
         if self.step_count >= self.max_steps:
             done = True
@@ -120,6 +214,55 @@ class StochasticDistShiftEnv(DistShiftEnv):
         obs = self.gen_obs()
 
         return obs, reward, done, {}
+
+    def reset(self):
+        # Current position and direction of the agent
+        self.agent_pos = None
+        self.agent_dir = None
+
+        # Generate a new random grid at the start of each episode
+        # To keep the same grid for each episode, call env.seed() with
+        # the same seed before calling env.reset()
+        self._gen_grid(self.width, self.height)
+
+        # These fields should be defined by _gen_grid
+        assert self.agent_pos is not None
+        assert self.agent_dir is not None
+
+        # Check that the agent doesn't overlap with an object
+        start_cell = self.grid.get(*self.agent_pos)
+        assert start_cell is None or start_cell.can_overlap()
+
+        # Item picked up, being carried, initially nothing
+        self.carrying = None
+
+        # Step count since episode start
+        self.step_count = 0
+        self.remaining_budget = self.adversary_budget
+
+        # Return first observation
+        obs = self.gen_obs()
+
+        return obs
+
+    def gen_adv_obs(self, states, probas):
+        grid, vis_mask = self.gen_obs_grid()
+
+        # Encode the partially observable view into a numpy array
+        image = grid.encode(vis_mask)
+
+        torch_probas = self._preprocess_transitions(states, probas)
+
+        obs = {
+            "image": image,
+            "direction": self.agent_dir,
+            "position": self.agent_pos,
+            "mission": self.mission,
+            "transition_probas": torch_probas,
+            "remaining_budget": self.remaining_budget,
+        }
+
+        return obs
 
     def gen_obs(self):
         """
@@ -144,23 +287,13 @@ class StochasticDistShiftEnv(DistShiftEnv):
             "direction": self.agent_dir,
             "position": self.agent_pos,
             "mission": self.mission,
+            "remaining_budget": self.remaining_budget,
         }
 
         return obs
 
 
-class StochasticDistShift1(StochasticDistShiftEnv):
-    def __init__(self, **kwargs):
-        super().__init__(strip2_row=2, **kwargs)
-
-
-def make_env(env_key, seed=None):
-    env = gym.make(env_key)
-    env.seed(seed)
-    return env
-
-
-def get_stochastic_env(seed=None, **kwargs):
-    env = StochasticDistShift1(**kwargs)
+def get_stochastic_fixed_adversary_env(adversary_budget, seed=None, **kwargs):
+    env = FixedAdversaryStochasticDistShift1(adversary_budget, **kwargs)
     env.seed(seed)
     return env

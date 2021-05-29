@@ -11,6 +11,12 @@ class StochasticDistShiftEnv(DistShiftEnv):
     Stochastic Distributional shift environment.
     """
 
+    class RestrictedActions(IntEnum):
+        # Turn left, turn right, move forward
+        left = 0
+        right = 1
+        forward = 2
+
     def __init__(
         self,
         width=9,
@@ -29,6 +35,9 @@ class StochasticDistShiftEnv(DistShiftEnv):
             agent_start_dir=agent_start_dir,
             strip2_row=strip2_row,
         )
+
+        self.actions = StochasticDistShift1.RestrictedActions
+        self.action_space = gym.spaces.Discrete(len(self.actions))
 
     def _move_up(self):
         reward = 0
@@ -86,30 +95,6 @@ class StochasticDistShiftEnv(DistShiftEnv):
                     reward = self._reward()
                 if fwd_cell != None and fwd_cell.type == "lava":
                     done = True
-
-            # Pick up an object
-            elif action == self.actions.pickup:
-                if fwd_cell and fwd_cell.can_pickup():
-                    if self.carrying is None:
-                        self.carrying = fwd_cell
-                        self.carrying.cur_pos = np.array([-1, -1])
-                        self.grid.set(*fwd_pos, None)
-
-            # Drop an object
-            elif action == self.actions.drop:
-                if not fwd_cell and self.carrying:
-                    self.grid.set(*fwd_pos, self.carrying)
-                    self.carrying.cur_pos = fwd_pos
-                    self.carrying = None
-
-            # Toggle/activate an object
-            elif action == self.actions.toggle:
-                if fwd_cell:
-                    fwd_cell.toggle(self, fwd_pos)
-
-            # Done action (not used by default)
-            elif action == self.actions.done:
-                pass
 
             else:
                 assert False, "unknown action"

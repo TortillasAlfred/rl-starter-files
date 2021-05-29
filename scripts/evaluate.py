@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 from os.path import join
 import utils
+import numpy as np
 
 
 # Parse arguments
@@ -48,6 +49,8 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+
+np.seterr(all="ignore")
 
 # Set seed for all randomness sources
 
