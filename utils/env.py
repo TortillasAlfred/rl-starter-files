@@ -14,11 +14,11 @@ class StochasticDistShiftEnv(DistShiftEnv):
     def __init__(
         self,
         width=9,
-        height=7,
+        height=15,
         agent_start_pos=np.array((1, 1)),
         agent_start_dir=0,
         strip2_row=2,
-        delta=0.01,  # Random proba
+        delta=0.05,  # Random proba
     ):
         self.delta = delta
 
