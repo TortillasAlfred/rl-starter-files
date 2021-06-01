@@ -39,6 +39,10 @@ class StochasticDistShiftEnv(DistShiftEnv):
         self.actions = StochasticDistShift1.RestrictedActions
         self.action_space = gym.spaces.Discrete(len(self.actions))
 
+    @property
+    def state_size(self):
+        return self.grid.width * self.grid.height * 4
+
     def _move_up(self):
         reward = 0
         done = False

@@ -161,13 +161,50 @@ txt_logger.info(f"Device: {device}\n")
 
 # Load environments
 
+
+dummy_env = utils.get_stochastic_env()
+
+policy_acmodel = ACModel(
+    dummy_env.observation_space, dummy_env.action_space, args.mem, args.text
+)
+
+adversary_acmodel = AdversaryACModel(dummy_env)
+
+adversary_agent = utils.AdversaryAgent(
+    adversary_acmodel,
+    dummy_env,
+    model_dir,
+    device=device,
+    num_envs=args.procs,
+    pretrained=False,
+)
+
+policy_agent = utils.Agent(
+    policy_acmodel,
+    dummy_env.observation_space,
+    model_dir,
+    device=device,
+    argmax=True,
+    num_envs=args.procs,
+    pretrained=False,
+)
+
+
 envs = []
 for i in range(args.procs):
     # Overrode the old flexible env loading to only load our stochastic env
     # envs.append(utils.make_env(args.env, args.seed + 10000 * i))
+    # envs.append(
+    #     utils.get_stochastic_fixed_adversary_env(
+    #         1.0 / args.target_quantile, seed=args.seed + 10000 * i, delta=args.delta
+    #     )
+    # )
     envs.append(
-        utils.get_stochastic_fixed_adversary_env(
-            1.0 / args.target_quantile, seed=args.seed + 10000 * i, delta=args.delta
+        utils.get_stochastic_fixed_policy_env(
+            policy_agent,
+            1.0 / args.target_quantile,
+            seed=args.seed + 10000 * i,
+            delta=args.delta,
         )
     )
 txt_logger.info("Environments loaded\n")
@@ -182,7 +219,10 @@ txt_logger.info("Training status loaded\n")
 
 # Load observations preprocessor
 
-obs_space, preprocess_obss = utils.get_policy_obss_prepocessor(
+# obs_space, preprocess_obss = utils.get_policy_obss_prepocessor(
+#     envs[0].observation_space
+# )
+obs_space, preprocess_obss = utils.get_adversary_obss_preprocessor(
     envs[0].observation_space
 )
 if "vocab" in status:
@@ -191,35 +231,47 @@ txt_logger.info("Observations preprocessor loaded")
 
 # Load model
 
-policy_acmodel = ACModel(obs_space, envs[0].action_space, args.mem, args.text)
-
-if "model_state" in status:
-    policy_acmodel.load_state_dict(status["model_state"])
+try:
+    policy_status = utils.get_status(
+        utils.get_model_dir("seed1_21-05-29-12-10-47")
+    )  # TODO: Change after test
+except OSError:
+    policy_status = {"num_frames": 0, "update": 0}
+if "model_state" in policy_status:
+    policy_acmodel.load_state_dict(policy_status["model_state"])
 policy_acmodel.to(device)
 txt_logger.info("Policy model loaded\n")
 txt_logger.info("{}\n".format(policy_acmodel))
 
-adversary_acmodel = AdversaryACModel(envs[0])
+if "model_state" in status:
+    adversary_acmodel.load_state_dict(status["model_state"])
 adversary_acmodel.to(device)
 txt_logger.info("Adversary model loaded\n")
 txt_logger.info("{}\n".format(adversary_acmodel))
-adversary_agent = utils.AdversaryAgent(
-    adversary_acmodel,
-    envs[0],
-    model_dir,
-    device=device,
-    num_envs=args.procs,
-    pretrained=False,
-)
-
-for env in envs:
-    env.adversary = adversary_agent  # Link model parameters
 
 # Load algo
 
-policy_algo = torch_ac.PPOAlgo(
+# policy_algo = torch_ac.PPOAlgo(
+#     envs,
+#     policy_acmodel,
+#     device,
+#     args.frames_per_proc,
+#     args.discount,
+#     args.lr,
+#     args.gae_lambda,
+#     args.entropy_coef,
+#     args.value_loss_coef,
+#     args.max_grad_norm,
+#     args.recurrence,
+#     args.optim_eps,
+#     args.clip_eps,
+#     args.epochs,
+#     args.batch_size,
+#     preprocess_obss,
+# )
+adv_algo = utils.ContinuousPPOAlgo(
     envs,
-    policy_acmodel,
+    adversary_acmodel,
     device,
     args.frames_per_proc,
     args.discount,
@@ -237,7 +289,7 @@ policy_algo = torch_ac.PPOAlgo(
 )
 
 if "optimizer_state" in status:
-    policy_algo.optimizer.load_state_dict(status["optimizer_state"])
+    adv_algo.optimizer.load_state_dict(status["optimizer_state"])
 txt_logger.info("Optimizer loaded\n")
 
 # Train model
@@ -250,8 +302,8 @@ while num_frames < args.frames:
     # Update model parameters
 
     update_start_time = time.time()
-    exps, logs1 = policy_algo.collect_experiences()
-    logs2 = policy_algo.update_parameters(exps)
+    exps, logs1 = adv_algo.collect_experiences()
+    logs2 = adv_algo.update_parameters(exps)
     logs = {**logs1, **logs2}
     update_end_time = time.time()
 
@@ -306,7 +358,7 @@ while num_frames < args.frames:
             "num_frames": num_frames,
             "update": update,
             "model_state": policy_acmodel.state_dict(),
-            "optimizer_state": policy_algo.optimizer.state_dict(),
+            "optimizer_state": adv_algo.optimizer.state_dict(),
         }
         if hasattr(preprocess_obss, "vocab"):
             status["vocab"] = preprocess_obss.vocab.vocab

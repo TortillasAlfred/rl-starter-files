@@ -4,3 +4,4 @@ from .format import *
 from .other import *
 from .storage import *
 from .adversarial_envs import *
+from .algo import *

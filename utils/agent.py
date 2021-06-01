@@ -13,19 +13,16 @@ class Agent:
 
     def __init__(
         self,
+        acmodel,
         obs_space,
-        action_space,
         model_dir,
         device=None,
         argmax=False,
         num_envs=1,
-        use_memory=False,
-        use_text=False,
+        pretrained=False,
     ):
-        obs_space, self.preprocess_obss = utils.get_obss_preprocessor(obs_space)
-        self.acmodel = ACModel(
-            obs_space, action_space, use_memory=use_memory, use_text=use_text
-        )
+        obs_space, self.preprocess_obss = utils.get_policy_obss_prepocessor(obs_space)
+        self.acmodel = acmodel
         self.device = device
         self.argmax = argmax
         self.num_envs = num_envs
@@ -35,7 +32,8 @@ class Agent:
                 self.num_envs, self.acmodel.memory_size, device=self.device
             )
 
-        self.acmodel.load_state_dict(utils.get_model_state(model_dir))
+        if pretrained:
+            self.acmodel.load_state_dict(utils.get_model_state(model_dir))
         self.acmodel.to(self.device)
         self.acmodel.eval()
         if hasattr(self.preprocess_obss, "vocab"):
