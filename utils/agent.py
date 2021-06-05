@@ -101,21 +101,23 @@ class AdversaryAgent:
             self.acmodel.load_state_dict(utils.get_model_state(model_dir))
         self.acmodel.to(self.device)
 
-    def get_new_probas(self, obss):
+    def get_perturbations(self, obss):
         preprocessed_obss = self.preprocess_obss(obss, device=self.device)
 
         with torch.no_grad():
             if self.acmodel.recurrent:
-                new_probas, _, self.memories = self.acmodel(
+                _, dist, _, self.memories = self.acmodel(
                     preprocessed_obss, self.memories
                 )
             else:
-                new_probas, _ = self.acmodel(preprocessed_obss)
+                _, dist, _ = self.acmodel(preprocessed_obss)
 
-        return new_probas.cpu().numpy()
+        perturbations = dist.mean
 
-    def get_new_proba(self, obs):
-        return self.get_new_probas([obs])[0]
+        return perturbations.cpu().numpy()
+
+    def get_perturbation(self, obs):
+        return self.get_perturbations([obs])[0]
 
     def analyze_feedbacks(self, rewards, dones):
         if self.acmodel.recurrent:

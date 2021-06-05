@@ -62,6 +62,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
             reward = self._reward()
         if up_cell != None and up_cell.type == "lava":
             done = True
+            reward = -0.1
 
         return reward, done
 
@@ -99,9 +100,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
                     reward = self._reward()
                 if fwd_cell != None and fwd_cell.type == "lava":
                     done = True
-
-            else:
-                assert False, "unknown action"
+                    reward = -0.1
 
         if self.step_count >= self.max_steps:
             done = True

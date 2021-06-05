@@ -121,8 +121,8 @@ class AdversaryACModel(nn.Module, torch_ac.RecurrentACModel):
         env,
         action_std_init=0.6,
         device="cuda",
-        action_std_decay_rate=0.05,
-        min_action_std=0.1,
+        action_std_decay_rate=0.025,
+        min_action_std=0.3,
     ):
         super().__init__()
 
@@ -130,7 +130,7 @@ class AdversaryACModel(nn.Module, torch_ac.RecurrentACModel):
         self.device = device
 
         # Define feature extractor
-        self.feature_size = 256
+        self.feature_size = 128
         self.feature_extractor = nn.Sequential(
             nn.Linear(env.state_size + 1, self.feature_size),
             nn.ReLU(),

@@ -60,6 +60,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
             reward = self._reward()
         if up_cell != None and up_cell.type == "lava":
             done = True
+            reward = -0.1
 
         return next_pos, next_dir, reward, done
 
@@ -94,6 +95,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
                 reward = self._reward()
             if fwd_cell != None and fwd_cell.type == "lava":
                 done = True
+                reward = -0.1
 
         else:
             assert False, "unknown action"
@@ -164,27 +166,24 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
     def _get_adversarial_perturbation(self, states, probas):
         adv_obs = self.gen_adv_obs(states, probas)
         with torch.no_grad():
-            perturbed_transitions = self.adversary.get_new_proba(adv_obs)
+            perturbations = self.adversary.get_perturbation(adv_obs)
 
-        # Ensure adversary budget is respected
-        perturbations = (
-            perturbed_transitions / adv_obs["transition_probas"][:-1].cpu().numpy()
-        )
-        perturbations = np.nan_to_num(perturbations, nan=1)
+        # Ensure adversary budget is respectedS
         max_perturbation = perturbations.max()
+        old_transitions = adv_obs["transition_probas"][:-1].cpu().numpy()
 
-        if max_perturbation > self.remaining_budget:
+        if max_perturbation > self.remaining_budget and len(states) > 1:
             if self.remaining_budget > 1 + self.eps:
                 perturbations = (
                     max_perturbation
                     - self.remaining_budget
                     + (self.remaining_budget - 1) * perturbations
                 ) / (max_perturbation - 1)
-                perturbed_transitions = (
-                    adv_obs["transition_probas"][:-1].cpu().numpy() * perturbations
-                )
+                perturbed_transitions = old_transitions * perturbations
             else:
-                perturbed_transitions = adv_obs["transition_probas"][:-1].cpu().numpy()
+                perturbed_transitions = old_transitions
+        else:
+            perturbed_transitions = old_transitions
 
         # Cast back into the list format
         perturbed_transitions, perturbations = self._postprocess_transitions(
@@ -347,6 +346,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
             reward = self._reward()
         if up_cell != None and up_cell.type == "lava":
             done = True
+            reward = -0.1
 
         return next_pos, next_dir, reward, done
 
@@ -381,6 +381,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
                 reward = self._reward()
             if fwd_cell != None and fwd_cell.type == "lava":
                 done = True
+                reward = -0.1
 
         else:
             assert False, "unknown action"

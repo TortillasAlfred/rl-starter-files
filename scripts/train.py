@@ -9,358 +9,396 @@ import sys
 import utils
 from model import ACModel, AdversaryACModel
 import numpy as np
+import os
+import shutil
 
 
-# Parse arguments
+def train_config(args):
+    date = datetime.datetime.now().strftime("%y-%m-%d-%H-%M-%S")
+    default_model_name = f"leader={args.leader}_alpha={args.target_quantile}_K={args.n_steps_follower}_seed={args.seed}"
 
-parser = argparse.ArgumentParser()
+    model_name = args.model or default_model_name
+    model_dir = utils.get_model_dir(model_name)
 
-## General parameters
-parser.add_argument(
-    "--model", default=None, help="name of the model (default: {ENV}_{ALGO}_{TIME})"
-)
-parser.add_argument("--seed", type=int, default=1, help="random seed (default: 1)")
-parser.add_argument(
-    "--log-interval",
-    type=int,
-    default=1,
-    help="number of updates between two logs (default: 1)",
-)
-parser.add_argument(
-    "--save-interval",
-    type=int,
-    default=10,
-    help="number of updates between two saves (default: 10, 0 means no saving)",
-)
-parser.add_argument(
-    "--procs", type=int, default=16, help="number of processes (default: 16)"
-)
-parser.add_argument(
-    "--frames",
-    type=int,
-    default=10 ** 7,
-    help="number of frames of training (default: 1e7)",
-)
+    if os.path.isdir(model_dir):
+        shutil.rmtree(model_dir)
 
-## Parameters for main algorithm
-parser.add_argument(
-    "--epochs", type=int, default=4, help="number of epochs for PPO (default: 4)"
-)
-parser.add_argument(
-    "--batch-size", type=int, default=512, help="batch size for PPO (default: 512)"
-)
-parser.add_argument(
-    "--frames-per-proc",
-    type=int,
-    default=256,
-    help="number of frames per process before update (default: 5 for A2C and 128 for PPO)",
-)
-parser.add_argument(
-    "--discount", type=float, default=0.99, help="discount factor (default: 0.99)"
-)
-parser.add_argument(
-    "--lr", type=float, default=0.001, help="learning rate (default: 0.001)"
-)
-parser.add_argument(
-    "--gae-lambda",
-    type=float,
-    default=0.95,
-    help="lambda coefficient in GAE formula (default: 0.95, 1 means no gae)",
-)
-parser.add_argument(
-    "--entropy-coef",
-    type=float,
-    default=0.01,
-    help="entropy term coefficient (default: 0.01)",
-)
-parser.add_argument(
-    "--value-loss-coef",
-    type=float,
-    default=0.5,
-    help="value loss term coefficient (default: 0.5)",
-)
-parser.add_argument(
-    "--max-grad-norm",
-    type=float,
-    default=0.5,
-    help="maximum norm of gradient (default: 0.5)",
-)
-parser.add_argument(
-    "--optim-eps",
-    type=float,
-    default=1e-8,
-    help="Adam and RMSprop optimizer epsilon (default: 1e-8)",
-)
-parser.add_argument(
-    "--optim-alpha",
-    type=float,
-    default=0.99,
-    help="RMSprop optimizer alpha (default: 0.99)",
-)
-parser.add_argument(
-    "--clip-eps",
-    type=float,
-    default=0.2,
-    help="clipping epsilon for PPO (default: 0.2)",
-)
-parser.add_argument(
-    "--recurrence",
-    type=int,
-    default=1,
-    help="number of time-steps gradient is backpropagated (default: 1). If > 1, a LSTM is added to the model to have memory.",
-)
-parser.add_argument(
-    "--text",
-    action="store_true",
-    default=False,
-    help="add a GRU to the model to handle text input",
-)
-parser.add_argument(
-    "--delta", type=float, default=0.05, help="env stochasticity (default: 0.05)"
-)
-parser.add_argument(
-    "--target_quantile",
-    type=float,
-    default=0.1,
-    help="target CVaR quantile (default: 0.1)",
-)
+    # Load loggers and Tensorboard writer
 
-args = parser.parse_args()
+    txt_logger = utils.get_txt_logger(model_dir)
+    csv_file, csv_logger = utils.get_csv_logger(model_dir)
+    tb_writer = tensorboardX.SummaryWriter(model_dir)
 
-args.mem = args.recurrence > 1
+    # Log command and all script arguments
 
-# Set run dir
+    txt_logger.info("{}\n".format(" ".join(sys.argv)))
+    txt_logger.info("{}\n".format(args))
 
-np.seterr(all="ignore")
+    # Set seed for all randomness sources
 
-date = datetime.datetime.now().strftime("%y-%m-%d-%H-%M-%S")
-default_model_name = f"seed{args.seed}_{date}"
+    utils.seed(args.seed)
 
-model_name = args.model or default_model_name
-model_dir = utils.get_model_dir(model_name)
+    # Set device
 
-# Load loggers and Tensorboard writer
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    txt_logger.info(f"Device: {device}\n")
 
-txt_logger = utils.get_txt_logger(model_dir)
-csv_file, csv_logger = utils.get_csv_logger(model_dir)
-tb_writer = tensorboardX.SummaryWriter(model_dir)
+    # Load environments
 
-# Log command and all script arguments
+    dummy_env = utils.get_stochastic_env()
 
-txt_logger.info("{}\n".format(" ".join(sys.argv)))
-txt_logger.info("{}\n".format(args))
-
-# Set seed for all randomness sources
-
-utils.seed(args.seed)
-
-# Set device
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-txt_logger.info(f"Device: {device}\n")
-
-# Load environments
-
-
-dummy_env = utils.get_stochastic_env()
-
-policy_acmodel = ACModel(
-    dummy_env.observation_space, dummy_env.action_space, args.mem, args.text
-)
-
-adversary_acmodel = AdversaryACModel(dummy_env)
-
-adversary_agent = utils.AdversaryAgent(
-    adversary_acmodel,
-    dummy_env,
-    model_dir,
-    device=device,
-    num_envs=args.procs,
-    pretrained=False,
-)
-
-policy_agent = utils.Agent(
-    policy_acmodel,
-    dummy_env.observation_space,
-    model_dir,
-    device=device,
-    argmax=True,
-    num_envs=args.procs,
-    pretrained=False,
-)
-
-
-envs = []
-for i in range(args.procs):
-    # Overrode the old flexible env loading to only load our stochastic env
-    # envs.append(utils.make_env(args.env, args.seed + 10000 * i))
-    # envs.append(
-    #     utils.get_stochastic_fixed_adversary_env(
-    #         1.0 / args.target_quantile, seed=args.seed + 10000 * i, delta=args.delta
-    #     )
-    # )
-    envs.append(
-        utils.get_stochastic_fixed_policy_env(
-            policy_agent,
-            1.0 / args.target_quantile,
-            seed=args.seed + 10000 * i,
-            delta=args.delta,
-        )
+    policy_acmodel = ACModel(
+        dummy_env.observation_space, dummy_env.action_space, args.mem, args.text
     )
-txt_logger.info("Environments loaded\n")
 
-# Load training status
+    adversary_acmodel = AdversaryACModel(dummy_env)
 
-try:
-    status = utils.get_status(model_dir)
-except OSError:
-    status = {"num_frames": 0, "update": 0}
-txt_logger.info("Training status loaded\n")
+    adversary_agent = utils.AdversaryAgent(
+        adversary_acmodel,
+        dummy_env,
+        model_dir,
+        device=device,
+        num_envs=args.procs,
+        pretrained=False,
+    )
 
-# Load observations preprocessor
+    policy_agent = utils.Agent(
+        policy_acmodel,
+        dummy_env.observation_space,
+        model_dir,
+        argmax=True,
+        device=device,
+        num_envs=args.procs,
+        pretrained=False,
+    )
 
-# obs_space, preprocess_obss = utils.get_policy_obss_prepocessor(
-#     envs[0].observation_space
-# )
-obs_space, preprocess_obss = utils.get_adversary_obss_preprocessor(
-    envs[0].observation_space
-)
-if "vocab" in status:
-    preprocess_obss.vocab.load_vocab(status["vocab"])
-txt_logger.info("Observations preprocessor loaded")
-
-# Load model
-
-try:
-    policy_status = utils.get_status(
-        utils.get_model_dir("seed1_21-05-29-12-10-47")
-    )  # TODO: Change after test
-except OSError:
-    policy_status = {"num_frames": 0, "update": 0}
-if "model_state" in policy_status:
-    policy_acmodel.load_state_dict(policy_status["model_state"])
-policy_acmodel.to(device)
-txt_logger.info("Policy model loaded\n")
-txt_logger.info("{}\n".format(policy_acmodel))
-
-if "model_state" in status:
-    adversary_acmodel.load_state_dict(status["model_state"])
-adversary_acmodel.to(device)
-txt_logger.info("Adversary model loaded\n")
-txt_logger.info("{}\n".format(adversary_acmodel))
-
-# Load algo
-
-# policy_algo = torch_ac.PPOAlgo(
-#     envs,
-#     policy_acmodel,
-#     device,
-#     args.frames_per_proc,
-#     args.discount,
-#     args.lr,
-#     args.gae_lambda,
-#     args.entropy_coef,
-#     args.value_loss_coef,
-#     args.max_grad_norm,
-#     args.recurrence,
-#     args.optim_eps,
-#     args.clip_eps,
-#     args.epochs,
-#     args.batch_size,
-#     preprocess_obss,
-# )
-adv_algo = utils.ContinuousPPOAlgo(
-    envs,
-    adversary_acmodel,
-    device,
-    args.frames_per_proc,
-    args.discount,
-    args.lr,
-    args.gae_lambda,
-    args.entropy_coef,
-    args.value_loss_coef,
-    args.max_grad_norm,
-    args.recurrence,
-    args.optim_eps,
-    args.clip_eps,
-    args.epochs,
-    args.batch_size,
-    preprocess_obss,
-)
-
-if "optimizer_state" in status:
-    adv_algo.optimizer.load_state_dict(status["optimizer_state"])
-txt_logger.info("Optimizer loaded\n")
-
-# Train model
-
-num_frames = status["num_frames"]
-update = status["update"]
-start_time = time.time()
-
-while num_frames < args.frames:
-    # Update model parameters
-
-    update_start_time = time.time()
-    exps, logs1 = adv_algo.collect_experiences()
-    logs2 = adv_algo.update_parameters(exps)
-    logs = {**logs1, **logs2}
-    update_end_time = time.time()
-
-    num_frames += logs["num_frames"]
-    update += 1
-
-    # Print logs
-
-    if update % args.log_interval == 0:
-        fps = logs["num_frames"] / (update_end_time - update_start_time)
-        duration = int(time.time() - start_time)
-        return_per_episode = utils.synthesize(logs["return_per_episode"])
-        rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
-        num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
-
-        header = ["update", "frames", "FPS", "duration"]
-        data = [update, num_frames, fps, duration]
-        header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
-        data += rreturn_per_episode.values()
-        header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
-        data += num_frames_per_episode.values()
-        header += ["entropy", "value", "policy_loss", "value_loss", "grad_norm"]
-        data += [
-            logs["entropy"],
-            logs["value"],
-            logs["policy_loss"],
-            logs["value_loss"],
-            logs["grad_norm"],
-        ]
-
-        txt_logger.info(
-            "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | F:μσmM {:.1f} {:.1f} {} {} | H {:.3f} | V {:.3f} | pL {:.3f} | vL {:.3f} | ∇ {:.3f}".format(
-                *data
+    pol_envs = []
+    adv_envs = []
+    for i in range(args.procs):
+        # Overrode the old flexible env loading to only load our stochastic env
+        # envs.append(utils.make_env(args.env, args.seed + 10000 * i))
+        pol_envs.append(
+            utils.get_stochastic_fixed_adversary_env(
+                adversary_agent,
+                1.0 / args.target_quantile,
+                seed=args.seed + 10000 * i,
+                delta=args.delta,
             )
         )
+        adv_envs.append(
+            utils.get_stochastic_fixed_policy_env(
+                policy_agent,
+                1.0 / args.target_quantile,
+                seed=args.seed + 10000 * i,
+                delta=args.delta,
+            )
+        )
+    txt_logger.info("Environments loaded\n")
 
-        header += ["return_" + key for key in return_per_episode.keys()]
-        data += return_per_episode.values()
+    # Load training status
 
-        if status["num_frames"] == 0:
-            csv_logger.writerow(header)
-        csv_logger.writerow(data)
-        csv_file.flush()
+    try:
+        status = utils.get_status(model_dir)
+    except OSError:
+        status = {"num_frames": 0, "update": 0}
+    txt_logger.info("Training status loaded\n")
 
-        for field, value in zip(header, data):
-            tb_writer.add_scalar(field, value, num_frames)
+    # Load observations preprocessor
 
-    # Save status
+    _, pol_preprocess_obss = utils.get_policy_obss_prepocessor(
+        pol_envs[0].observation_space
+    )
+    _, adv_preprocess_obss = utils.get_adversary_obss_preprocessor(
+        adv_envs[0].observation_space
+    )
 
-    if args.save_interval > 0 and update % args.save_interval == 0:
-        status = {
-            "num_frames": num_frames,
-            "update": update,
-            "model_state": policy_acmodel.state_dict(),
-            "optimizer_state": adv_algo.optimizer.state_dict(),
-        }
-        if hasattr(preprocess_obss, "vocab"):
-            status["vocab"] = preprocess_obss.vocab.vocab
-        utils.save_status(status, model_dir)
-        txt_logger.info("Status saved")
+    txt_logger.info("Observations preprocessor loaded")
+
+    # Load model
+    policy_acmodel.to(device)
+    txt_logger.info("Policy model loaded\n")
+    txt_logger.info("{}\n".format(policy_acmodel))
+
+    adversary_acmodel.to(device)
+    txt_logger.info("Adversary model loaded\n")
+    txt_logger.info("{}\n".format(adversary_acmodel))
+
+    # Load algo
+
+    policy_algo = torch_ac.PPOAlgo(
+        pol_envs,
+        policy_acmodel,
+        device,
+        args.frames_per_proc,
+        args.discount,
+        args.lr,
+        args.gae_lambda,
+        args.entropy_coef,
+        args.value_loss_coef,
+        args.max_grad_norm,
+        args.recurrence,
+        args.optim_eps,
+        args.clip_eps,
+        args.epochs,
+        args.batch_size,
+        pol_preprocess_obss,
+    )
+
+    adv_algo = utils.ContinuousPPOAlgo(
+        adv_envs,
+        adversary_acmodel,
+        device,
+        args.frames_per_proc,
+        args.discount,
+        args.lr,
+        args.gae_lambda,
+        args.entropy_coef,
+        args.value_loss_coef,
+        args.max_grad_norm,
+        args.recurrence,
+        args.optim_eps,
+        args.clip_eps,
+        args.epochs,
+        args.batch_size,
+        adv_preprocess_obss,
+    )
+
+    # Setup leader
+
+    if args.leader == "policy":
+        leader = policy_algo
+        follower = adv_algo
+    else:
+        leader = adv_algo
+        follower = policy_algo
+
+    # Train model
+
+    num_frames = status["num_frames"]
+    update = status["update"]
+    start_time = time.time()
+
+    while num_frames < args.frames:
+
+        for k in range(args.n_steps_follower):
+            exps, _ = follower.collect_experiences()
+            _ = follower.update_parameters(exps)
+
+        # Update model parameters
+
+        update_start_time = time.time()
+        exps, logs1 = leader.collect_experiences()
+        logs2 = leader.update_parameters(exps)
+        logs = {**logs1, **logs2}
+        update_end_time = time.time()
+
+        num_frames += logs["num_frames"]
+        update += 1
+
+        # Print logs
+
+        if update % args.log_interval == 0:
+            fps = logs["num_frames"] / (update_end_time - update_start_time)
+            duration = int(time.time() - start_time)
+            return_per_episode = utils.synthesize(logs["return_per_episode"])
+            rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
+            num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
+
+            header = ["update", "frames", "FPS", "duration"]
+            data = [update, num_frames, fps, duration]
+            header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
+            data += rreturn_per_episode.values()
+            header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
+            data += num_frames_per_episode.values()
+            header += ["entropy", "value", "policy_loss", "value_loss", "grad_norm"]
+            data += [
+                logs["entropy"],
+                logs["value"],
+                logs["policy_loss"],
+                logs["value_loss"],
+                logs["grad_norm"],
+            ]
+
+            txt_logger.info(
+                "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | F:μσmM {:.1f} {:.1f} {} {} | H {:.3f} | V {:.3f} | pL {:.3f} | vL {:.3f} | ∇ {:.3f}".format(
+                    *data
+                )
+            )
+
+            header += ["return_" + key for key in return_per_episode.keys()]
+            data += return_per_episode.values()
+
+            if num_frames == 0:
+                csv_logger.writerow(header)
+            csv_logger.writerow(data)
+            csv_file.flush()
+
+            for field, value in zip(header, data):
+                tb_writer.add_scalar(field, value, num_frames)
+
+        # Save status
+
+        if args.save_interval > 0 and update % args.save_interval == 0:
+            status = {
+                "num_frames": num_frames,
+                "update": update,
+                "model_state": policy_acmodel.state_dict(),
+            }
+            utils.save_status(status, model_dir)
+            txt_logger.info("Status saved")
+
+
+def train_all_configs(args):
+    configs = [
+        # ("policy", 0.01, 4),
+        ("policy", 0.5, 1),
+        ("adversary", 0.5, 1),
+        # ("adversary", 0.001, 8),
+    ]
+
+    for seed in range(3):
+        args.seed = seed
+
+        for leader, target_quantile, n_steps_follower in configs:
+            args.leader = leader
+            args.target_quantile = target_quantile
+            args.n_steps_follower = n_steps_follower
+
+            train_config(args)
+
+
+if __name__ == "__main__":
+
+    # Parse arguments
+
+    parser = argparse.ArgumentParser()
+
+    ## General parameters
+    parser.add_argument("--model", default=None, help="name of the model")
+    parser.add_argument("--seed", type=int, default=1, help="random seed (default: 1)")
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=1,
+        help="number of updates between two logs (default: 1)",
+    )
+    parser.add_argument(
+        "--save-interval",
+        type=int,
+        default=10,
+        help="number of updates between two saves (default: 10, 0 means no saving)",
+    )
+    parser.add_argument(
+        "--procs", type=int, default=1, help="number of processes (default: 16)"
+    )
+    parser.add_argument(
+        "--frames",
+        type=int,
+        default=250000,
+        help="number of frames of training (default: 1e7)",
+    )
+
+    ## Parameters for main algorithm
+    parser.add_argument(
+        "--epochs", type=int, default=4, help="number of epochs for PPO (default: 4)"
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=512, help="batch size for PPO (default: 512)"
+    )
+    parser.add_argument(
+        "--frames-per-proc",
+        type=int,
+        default=256,
+        help="number of frames per process before update (default: 5 for A2C and 128 for PPO)",
+    )
+    parser.add_argument(
+        "--discount", type=float, default=0.99, help="discount factor (default: 0.99)"
+    )
+    parser.add_argument(
+        "--lr", type=float, default=0.001, help="learning rate (default: 0.001)"
+    )
+    parser.add_argument(
+        "--gae-lambda",
+        type=float,
+        default=0.95,
+        help="lambda coefficient in GAE formula (default: 0.95, 1 means no gae)",
+    )
+    parser.add_argument(
+        "--entropy-coef",
+        type=float,
+        default=0.05,
+        help="entropy term coefficient (default: 0.01)",
+    )
+    parser.add_argument(
+        "--value-loss-coef",
+        type=float,
+        default=0.5,
+        help="value loss term coefficient (default: 0.5)",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=0.5,
+        help="maximum norm of gradient (default: 0.5)",
+    )
+    parser.add_argument(
+        "--optim-eps",
+        type=float,
+        default=1e-8,
+        help="Adam and RMSprop optimizer epsilon (default: 1e-8)",
+    )
+    parser.add_argument(
+        "--optim-alpha",
+        type=float,
+        default=0.99,
+        help="RMSprop optimizer alpha (default: 0.99)",
+    )
+    parser.add_argument(
+        "--clip-eps",
+        type=float,
+        default=0.2,
+        help="clipping epsilon for PPO (default: 0.2)",
+    )
+    parser.add_argument(
+        "--recurrence",
+        type=int,
+        default=1,
+        help="number of time-steps gradient is backpropagated (default: 1). If > 1, a LSTM is added to the model to have memory.",
+    )
+    parser.add_argument(
+        "--text",
+        action="store_true",
+        default=False,
+        help="add a GRU to the model to handle text input",
+    )
+    parser.add_argument(
+        "--delta", type=float, default=0.05, help="env stochasticity (default: 0.05)"
+    )
+    parser.add_argument(
+        "--target_quantile",
+        type=float,
+        default=0.5,
+        help="target CVaR quantile (default: 0.1)",
+    )
+    parser.add_argument(
+        "--leader",
+        type=str,
+        default="policy",
+        help="Leader of the Stackelberg game",
+    )
+    parser.add_argument(
+        "--n_steps_follower",
+        type=int,
+        default=8,
+        help="Number of times the follower updates itself in between leader updates.",
+    )
+
+    args = parser.parse_args()
+
+    args.mem = args.recurrence > 1
+
+    # Set run dir
+
+    np.seterr(all="ignore")
+
+    train_all_configs(args)

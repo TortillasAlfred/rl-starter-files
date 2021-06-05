@@ -74,15 +74,15 @@ print("Environments loaded\n")
 # Load agent
 
 model_dir = utils.get_model_dir(args.model)
+policy_acmodel = utils.ACModel(envs[0].observation_space, envs[0].action_space)
 agent = utils.Agent(
-    env.observation_space,
-    env.action_space,
+    policy_acmodel,
+    envs[0].observation_space,
     model_dir,
     device=device,
-    argmax=args.argmax,
+    argmax=True,
     num_envs=args.procs,
-    use_memory=args.memory,
-    use_text=args.text,
+    pretrained=True,
 )
 print("Agent loaded\n")
 
@@ -160,22 +160,12 @@ if n > 0:
 # TODO: Plot learned policy with argmax and no possible perturbation
 env = utils.get_stochastic_env(seed=args.seed, delta=0.0)
 
-agent = utils.Agent(
-    env.observation_space,
-    env.action_space,
-    model_dir,
-    device=device,
-    argmax=True,
-    num_envs=args.procs,
-    use_memory=args.memory,
-    use_text=args.text,
-)
-print("Agent reloaded\n")
-
 all_obs = []
 
 obs = env.reset()
 all_obs.append(obs)
+
+done = False
 
 while not done:
     action = agent.get_action(obs)
