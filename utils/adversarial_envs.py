@@ -17,7 +17,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
         self,
         adversary,
         adversary_budget,
-        width=9,
+        width=12,
         height=9,
         agent_start_pos=np.array((1, 1)),
         agent_start_dir=0,
@@ -42,7 +42,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
     def _fall_event(self):
         next_pos = self.agent_pos
         next_dir = self.agent_dir
-        reward = 0
+        reward = -1
         done = False
 
         up_pos = self.agent_pos + DIR_TO_VEC[-1]
@@ -57,17 +57,17 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
             next_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
-            reward = self._reward()
+            reward = 100
         if up_cell != None and up_cell.type == "lava":
             done = True
-            reward = -0.1
+            reward = -100
 
-        return next_pos, next_dir, reward, done
+        return next_pos, next_dir, reward / 100, done
 
     def _normal_event(self, action):
         next_pos = self.agent_pos
         next_dir = self.agent_dir
-        reward = 0
+        reward = -1
         done = False
 
         # Get the position in front of the agent
@@ -92,15 +92,15 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
                 next_pos = fwd_pos
             if fwd_cell != None and fwd_cell.type == "goal":
                 done = True
-                reward = self._reward()
+                reward = 100
             if fwd_cell != None and fwd_cell.type == "lava":
                 done = True
-                reward = -0.1
+                reward = -100
 
         else:
             assert False, "unknown action"
 
-        return (next_pos, next_dir, reward, done)
+        return (next_pos, next_dir, reward / 100, done)
 
     def _get_transition_probas(self, action):
         fall_state = self._fall_event()
@@ -256,7 +256,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
 
         obs = {
             "image": image,
-            "direction": self.agent_dir,
+            "direction": DIR_TO_VEC[self.agent_dir],
             "position": self.agent_pos,
             "mission": self.mission,
             "transition_probas": torch_probas,
@@ -285,7 +285,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
         # - a textual mission string (instructions for the agent)
         obs = {
             "image": image,
-            "direction": self.agent_dir,
+            "direction": DIR_TO_VEC[self.agent_dir],
             "position": self.agent_pos,
             "mission": self.mission,
             "remaining_budget": self.remaining_budget,
@@ -303,7 +303,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
         self,
         policy,
         adversary_budget,
-        width=9,
+        width=12,
         height=9,
         agent_start_pos=np.array((1, 1)),
         agent_start_dir=0,
@@ -328,7 +328,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
     def _fall_event(self):
         next_pos = self.agent_pos
         next_dir = self.agent_dir
-        reward = 0
+        reward = -1
         done = False
 
         up_pos = self.agent_pos + DIR_TO_VEC[-1]
@@ -343,17 +343,17 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
             next_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
-            reward = self._reward()
+            reward = 100
         if up_cell != None and up_cell.type == "lava":
             done = True
-            reward = -0.1
+            reward = -100
 
-        return next_pos, next_dir, reward, done
+        return next_pos, next_dir, reward / 100, done
 
     def _normal_event(self, action):
         next_pos = self.agent_pos
         next_dir = self.agent_dir
-        reward = 0
+        reward = -1
         done = False
 
         # Get the position in front of the agent
@@ -378,15 +378,15 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
                 next_pos = fwd_pos
             if fwd_cell != None and fwd_cell.type == "goal":
                 done = True
-                reward = self._reward()
+                reward = 100
             if fwd_cell != None and fwd_cell.type == "lava":
                 done = True
-                reward = -0.1
+                reward = -100
 
         else:
             assert False, "unknown action"
 
-        return (next_pos, next_dir, reward, done)
+        return (next_pos, next_dir, reward / 100, done)
 
     def _get_transition_probas(self, action):
         fall_state = self._fall_event()
@@ -545,7 +545,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
 
         obs = {
             "image": image,
-            "direction": self.agent_dir,
+            "direction": DIR_TO_VEC[self.agent_dir],
             "position": self.agent_pos,
             "mission": self.mission,
             "transition_probas": torch_probas,
@@ -574,7 +574,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
         # - a textual mission string (instructions for the agent)
         obs = {
             "image": image,
-            "direction": self.agent_dir,
+            "direction": DIR_TO_VEC[self.agent_dir],
             "position": self.agent_pos,
             "mission": self.mission,
             "remaining_budget": self.remaining_budget,

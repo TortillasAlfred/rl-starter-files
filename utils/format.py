@@ -47,18 +47,24 @@ def get_obss_preprocessor(obs_space):
 
 
 def get_policy_obss_prepocessor(obs_space):
-    obs_space = {"image": obs_space.spaces["image"].shape, "text": 100}
+    obs_space = {"state": (4,)}
 
     def preprocess_obss(obss, device=None):
         return torch_ac.DictList(
-            {"image": preprocess_images([obs["image"] for obs in obss], device=device)}
+            {
+                "state": preprocess_states(
+                    [obs["position"] for obs in obss],
+                    [obs["direction"] for obs in obss],
+                    device=device,
+                )
+            }
         )
 
     return obs_space, preprocess_obss
 
 
 def get_adversary_obss_preprocessor(obs_space):
-    obs_space = {"image": obs_space.spaces["image"].shape, "text": 100}
+    obs_space = {"state": (80,)}
 
     def preprocess_obss(obss, device=None):
         return torch_ac.DictList(
@@ -73,6 +79,15 @@ def get_adversary_obss_preprocessor(obs_space):
         )
 
     return obs_space, preprocess_obss
+
+
+def preprocess_states(positions, directions, device=None):
+    positions = torch.tensor(positions, device=device, dtype=torch.float32)
+    directions = torch.tensor(directions, device=device, dtype=torch.float32)
+
+    states = torch.hstack((positions, directions))
+
+    return states
 
 
 def preprocess_images(images, device=None):

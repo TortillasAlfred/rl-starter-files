@@ -19,7 +19,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
 
     def __init__(
         self,
-        width=9,
+        width=12,
         height=9,
         agent_start_pos=np.array((1, 1)),
         agent_start_dir=0,
@@ -44,7 +44,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
         return self.grid.width * self.grid.height * 4
 
     def _move_up(self):
-        reward = 0
+        reward = -1
         done = False
 
         up_pos = self.agent_pos + DIR_TO_VEC[-1]
@@ -59,12 +59,12 @@ class StochasticDistShiftEnv(DistShiftEnv):
             self.agent_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
-            reward = self._reward()
+            reward = 100
         if up_cell != None and up_cell.type == "lava":
             done = True
-            reward = -0.1
+            reward = -100
 
-        return reward, done
+        return reward / 100, done
 
     def step(self, action):
         self.step_count += 1
@@ -72,7 +72,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
         if self._rand_float(0, 1) < self.delta:
             reward, done = self._move_up()
         else:
-            reward = 0
+            reward = -1
             done = False
 
             # Get the position in front of the agent
@@ -97,10 +97,12 @@ class StochasticDistShiftEnv(DistShiftEnv):
                     self.agent_pos = fwd_pos
                 if fwd_cell != None and fwd_cell.type == "goal":
                     done = True
-                    reward = self._reward()
+                    reward = 100
                 if fwd_cell != None and fwd_cell.type == "lava":
                     done = True
-                    reward = -0.1
+                    reward = -100
+
+            reward = reward / 100
 
         if self.step_count >= self.max_steps:
             done = True
@@ -129,7 +131,7 @@ class StochasticDistShiftEnv(DistShiftEnv):
         # - a textual mission string (instructions for the agent)
         obs = {
             "image": image,
-            "direction": self.agent_dir,
+            "direction": DIR_TO_VEC[self.agent_dir],
             "position": self.agent_pos,
             "mission": self.mission,
         }
