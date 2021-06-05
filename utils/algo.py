@@ -271,6 +271,7 @@ class ContinuousPPOAlgo(BaseContinuousAlgo):
         num_frames_per_proc=None,
         discount=0.99,
         lr=0.001,
+        lr_decay_rate=0.999,
         gae_lambda=0.95,
         entropy_coef=0.01,
         value_loss_coef=0.5,
@@ -309,6 +310,10 @@ class ContinuousPPOAlgo(BaseContinuousAlgo):
         assert self.batch_size % self.recurrence == 0
 
         self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
+        self.lr_sched = torch.optim.lr_scheduler.ExponentialLR(
+            self.optimizer, gamma=lr_decay_rate
+        )
+
         self.batch_num = 0
         self.action_std_decay_freq = action_std_decay_freq
 
@@ -409,6 +414,7 @@ class ContinuousPPOAlgo(BaseContinuousAlgo):
                     self.acmodel.parameters(), self.max_grad_norm
                 )
                 self.optimizer.step()
+                self.lr_sched.step()
 
                 # Update log values
 
