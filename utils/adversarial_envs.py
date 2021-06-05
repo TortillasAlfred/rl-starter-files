@@ -109,9 +109,16 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
         if (fall_state[0] == normal_state[0]).all() and fall_state[1] == normal_state[
             1
         ]:
-            return [normal_state], [1.0]
+            return [normal_state], [self._get_state_index(normal_state)], [1.0]
         else:
-            return [fall_state, normal_state], [self.delta, 1.0 - self.delta]
+            return (
+                [fall_state, normal_state],
+                [
+                    self._get_state_index(fall_state),
+                    self._get_state_index(normal_state),
+                ],
+                [self.delta, 1.0 - self.delta],
+            )
 
     def _get_state_index(self, state):
         (x, y), direction, _, _ = state
@@ -145,7 +152,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
 
         return torch_probas
 
-    def _postprocess_transitions(self, perturbed_transitions, adv_obs):
+    def _postprocess_transitions(self, perturbed_transitions, state_idxs, adv_obs):
         perturbed_transitions = perturbed_transitions / perturbed_transitions.sum()
         perturbations = (
             perturbed_transitions / adv_obs["transition_probas"][:-1].cpu().numpy()
@@ -153,9 +160,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
         perturbations = np.nan_to_num(perturbations, nan=1)
         perturbations = perturbations[perturbed_transitions > 0].tolist()
 
-        perturbed_transitions = perturbed_transitions[
-            perturbed_transitions > 0
-        ].tolist()
+        perturbed_transitions = [perturbed_transitions[idx] for idx in state_idxs]
 
         perturbations_sum = sum(perturbed_transitions)
         for i in range(len(perturbed_transitions)):
@@ -163,7 +168,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
 
         return perturbed_transitions, perturbations
 
-    def _get_adversarial_perturbation(self, states, probas):
+    def _get_adversarial_perturbation(self, states, state_idxs, probas):
         adv_obs = self.gen_adv_obs(states, probas)
         with torch.no_grad():
             perturbations = self.adversary.get_perturbation(adv_obs)
@@ -187,7 +192,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
 
         # Cast back into the list format
         perturbed_transitions, perturbations = self._postprocess_transitions(
-            perturbed_transitions, adv_obs
+            perturbed_transitions, state_idxs, adv_obs
         )
 
         return perturbed_transitions, perturbations
@@ -195,10 +200,10 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
     def step(self, action):
         self.step_count += 1
 
-        states, probas = self._get_transition_probas(action)
+        states, state_idxs, probas = self._get_transition_probas(action)
 
         perturbed_probas, perturbations = self._get_adversarial_perturbation(
-            states, probas
+            states, state_idxs, probas
         )
 
         sampled_idx = np.random.choice(len(perturbed_probas), p=perturbed_probas)
@@ -395,9 +400,16 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
         if (fall_state[0] == normal_state[0]).all() and fall_state[1] == normal_state[
             1
         ]:
-            return [normal_state], [1.0]
+            return [normal_state], [self._get_state_index(normal_state)], [1.0]
         else:
-            return [fall_state, normal_state], [self.delta, 1.0 - self.delta]
+            return (
+                [fall_state, normal_state],
+                [
+                    self._get_state_index(fall_state),
+                    self._get_state_index(normal_state),
+                ],
+                [self.delta, 1.0 - self.delta],
+            )
 
     def _get_state_index(self, state):
         (x, y), direction, _, _ = state
@@ -441,9 +453,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
         perturbations = np.nan_to_num(perturbations, nan=1)
         perturbations = perturbations[perturbed_transitions > 0].tolist()
 
-        perturbed_transitions = perturbed_transitions[
-            perturbed_transitions > 0
-        ].tolist()
+        perturbed_transitions = [perturbed_transitions[idx] for idx in self.state_idxs]
 
         perturbations_sum = sum(perturbed_transitions)
         for i in range(len(perturbed_transitions)):
@@ -496,7 +506,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
             done = True
 
         action = self.policy.get_action(self.gen_obs())
-        self.states, self.probas = self._get_transition_probas(action)
+        self.states, self.state_idxs, self.probas = self._get_transition_probas(action)
 
         obs = self.gen_adv_obs()
 
@@ -529,7 +539,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
 
         # Return first observation
         action = self.policy.get_action(self.gen_obs())
-        self.states, self.probas = self._get_transition_probas(action)
+        self.states, self.state_idxs, self.probas = self._get_transition_probas(action)
 
         obs = self.gen_adv_obs()
 
