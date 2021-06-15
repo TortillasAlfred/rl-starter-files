@@ -73,7 +73,9 @@ def get_adversary_obss_preprocessor(obs_space):
                     [obs["transition_probas"] for obs in obss], device=device
                 ),
                 "remaining_budget": torch.tensor(
-                    [obs["remaining_budget"] for obs in obss], device=device
+                    [obs["remaining_budget"] for obs in obss],
+                    device=device,
+                    dtype=torch.float32,
                 ).unsqueeze(-1),
             }
         )

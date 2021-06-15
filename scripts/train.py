@@ -15,7 +15,7 @@ import shutil
 
 def train_config(args):
     date = datetime.datetime.now().strftime("%y-%m-%d-%H-%M-%S")
-    default_model_name = f"leader={args.leader}_alpha={args.target_quantile}_K={args.n_steps_follower}_seed={args.seed}"
+    default_model_name = f"alpha={args.target_quantile}_seed={args.seed}"
 
     model_name = args.model or default_model_name
     model_dir = utils.get_model_dir(model_name)
@@ -40,7 +40,8 @@ def train_config(args):
 
     # Set device
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(args.device)
     txt_logger.info(f"Device: {device}\n")
 
     # Load environments
@@ -48,10 +49,13 @@ def train_config(args):
     dummy_env = utils.get_stochastic_env()
 
     policy_acmodel = ACModel(
-        dummy_env.observation_space, dummy_env.action_space, args.mem, args.text
+        dummy_env.observation_space,
+        dummy_env.action_space,
+        args.mem,
+        args.text,
     )
 
-    adversary_acmodel = AdversaryACModel(dummy_env)
+    adversary_acmodel = AdversaryACModel(dummy_env, device=args.device)
 
     adversary_agent = utils.AdversaryAgent(
         adversary_acmodel,
@@ -132,6 +136,7 @@ def train_config(args):
         args.frames_per_proc,
         args.discount,
         args.lr,
+        args.lr_decay_pol,
         args.gae_lambda,
         args.entropy_coef,
         args.value_loss_coef,
@@ -151,6 +156,7 @@ def train_config(args):
         args.frames_per_proc,
         args.discount,
         args.lr,
+        args.lr_decay_adv,
         args.gae_lambda,
         args.entropy_coef,
         args.value_loss_coef,
@@ -163,15 +169,6 @@ def train_config(args):
         adv_preprocess_obss,
     )
 
-    # Setup leader
-
-    if args.leader == "policy":
-        leader = policy_algo
-        follower = adv_algo
-    else:
-        leader = adv_algo
-        follower = policy_algo
-
     # Train model
 
     num_frames = status["num_frames"]
@@ -180,15 +177,15 @@ def train_config(args):
 
     while num_frames < args.frames:
 
-        for k in range(args.n_steps_follower):
-            exps, _ = follower.collect_experiences()
-            _ = follower.update_parameters(exps)
+        # Update adversary parameters
+        exps, _ = adv_algo.collect_experiences()
+        _ = adv_algo.update_parameters(exps)
 
-        # Update model parameters
+        # Update policy parameters
 
         update_start_time = time.time()
-        exps, logs1 = leader.collect_experiences()
-        logs2 = leader.update_parameters(exps)
+        exps, logs1 = policy_algo.collect_experiences()
+        logs2 = policy_algo.update_parameters(exps)
         logs = {**logs1, **logs2}
         update_end_time = time.time()
 
@@ -249,22 +246,10 @@ def train_config(args):
 
 
 def train_all_configs(args):
-    configs = [
-        # ("policy", 0.01, 4),
-        ("policy", 0.5, 1),
-        ("adversary", 0.5, 1),
-        # ("adversary", 0.001, 8),
-    ]
+    for target_quantile in [0.01, 0.1, 0.5, 0.9]:
+        args.target_quantile = target_quantile
 
-    for seed in range(3):
-        args.seed = seed
-
-        for leader, target_quantile, n_steps_follower in configs:
-            args.leader = leader
-            args.target_quantile = target_quantile
-            args.n_steps_follower = n_steps_follower
-
-            train_config(args)
+        train_config(args)
 
 
 if __name__ == "__main__":
@@ -294,8 +279,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--frames",
         type=int,
-        default=250000,
-        help="number of frames of training (default: 1e7)",
+        default=1000000,
+        help="number of frames of training (default: 1e6)",
     )
 
     ## Parameters for main algorithm
@@ -308,14 +293,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--frames-per-proc",
         type=int,
-        default=256,
+        default=128 * 16,
         help="number of frames per process before update (default: 5 for A2C and 128 for PPO)",
     )
     parser.add_argument(
-        "--discount", type=float, default=0.99, help="discount factor (default: 0.99)"
+        "--discount", type=float, default=0.95, help="discount factor (default: 0.99)"
     )
     parser.add_argument(
         "--lr", type=float, default=0.001, help="learning rate (default: 0.001)"
+    )
+    parser.add_argument(
+        "--lr_decay_pol",
+        type=float,
+        default=0.999,
+        help="policy learning rate decay (default: 0.999)",
+    )
+    parser.add_argument(
+        "--lr_decay_adv",
+        type=float,
+        default=0.9999,
+        help="adversary learning rate decay (default: 0.9999)",
     )
     parser.add_argument(
         "--gae-lambda",
@@ -380,24 +377,11 @@ if __name__ == "__main__":
         default=0.5,
         help="target CVaR quantile (default: 0.1)",
     )
-    parser.add_argument(
-        "--leader",
-        type=str,
-        default="policy",
-        help="Leader of the Stackelberg game",
-    )
-    parser.add_argument(
-        "--n_steps_follower",
-        type=int,
-        default=8,
-        help="Number of times the follower updates itself in between leader updates.",
-    )
+    parser.add_argument("--device", type=str, default="cuda")
 
     args = parser.parse_args()
 
     args.mem = args.recurrence > 1
-
-    # Set run dir
 
     np.seterr(all="ignore")
 

@@ -59,12 +59,12 @@ class StochasticDistShiftEnv(DistShiftEnv):
             self.agent_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
-            reward = 100
+            reward = 20
         if up_cell != None and up_cell.type == "lava":
             done = True
-            reward = -100
+            reward = -20
 
-        return reward / 100, done
+        return reward / 20, done
 
     def step(self, action):
         self.step_count += 1
@@ -97,12 +97,12 @@ class StochasticDistShiftEnv(DistShiftEnv):
                     self.agent_pos = fwd_pos
                 if fwd_cell != None and fwd_cell.type == "goal":
                     done = True
-                    reward = 100
+                    reward = 20
                 if fwd_cell != None and fwd_cell.type == "lava":
                     done = True
-                    reward = -100
+                    reward = -20
 
-            reward = reward / 100
+            reward = reward / 20
 
         if self.step_count >= self.max_steps:
             done = True

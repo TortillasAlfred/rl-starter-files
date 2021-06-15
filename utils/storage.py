@@ -29,7 +29,7 @@ def get_status_path(model_dir):
 
 def get_status(model_dir):
     path = get_status_path(model_dir)
-    return torch.load(path)
+    return torch.load(path, "cpu")
 
 
 def save_status(status, model_dir):
@@ -55,8 +55,8 @@ def get_txt_logger(model_dir):
         format="%(message)s",
         handlers=[
             logging.FileHandler(filename=path),
-            logging.StreamHandler(sys.stdout)
-        ]
+            logging.StreamHandler(sys.stdout),
+        ],
     )
 
     return logging.getLogger()

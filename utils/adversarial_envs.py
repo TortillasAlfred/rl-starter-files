@@ -57,12 +57,12 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
             next_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
-            reward = 100
+            reward = 20
         if up_cell != None and up_cell.type == "lava":
             done = True
-            reward = -100
+            reward = -20
 
-        return next_pos, next_dir, reward / 100, done
+        return next_pos, next_dir, reward / 20, done
 
     def _normal_event(self, action):
         next_pos = self.agent_pos
@@ -92,15 +92,15 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
                 next_pos = fwd_pos
             if fwd_cell != None and fwd_cell.type == "goal":
                 done = True
-                reward = 100
+                reward = 20
             if fwd_cell != None and fwd_cell.type == "lava":
                 done = True
-                reward = -100
+                reward = -20
 
         else:
             assert False, "unknown action"
 
-        return (next_pos, next_dir, reward / 100, done)
+        return (next_pos, next_dir, reward / 20, done)
 
     def _get_transition_probas(self, action):
         fall_state = self._fall_event()
@@ -158,7 +158,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
             perturbed_transitions / adv_obs["transition_probas"][:-1].cpu().numpy()
         )
         perturbations = np.nan_to_num(perturbations, nan=1)
-        perturbations = perturbations[perturbed_transitions > 0].tolist()
+        perturbations = [perturbations[idx] for idx in state_idxs]
 
         perturbed_transitions = [perturbed_transitions[idx] for idx in state_idxs]
 
@@ -348,12 +348,12 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
             next_pos = up_pos
         if up_cell != None and up_cell.type == "goal":
             done = True
-            reward = 100
+            reward = 20
         if up_cell != None and up_cell.type == "lava":
             done = True
-            reward = -100
+            reward = -20
 
-        return next_pos, next_dir, reward / 100, done
+        return next_pos, next_dir, reward / 20, done
 
     def _normal_event(self, action):
         next_pos = self.agent_pos
@@ -383,15 +383,15 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
                 next_pos = fwd_pos
             if fwd_cell != None and fwd_cell.type == "goal":
                 done = True
-                reward = 100
+                reward = 20
             if fwd_cell != None and fwd_cell.type == "lava":
                 done = True
-                reward = -100
+                reward = -20
 
         else:
             assert False, "unknown action"
 
-        return (next_pos, next_dir, reward / 100, done)
+        return (next_pos, next_dir, reward / 20, done)
 
     def _get_transition_probas(self, action):
         fall_state = self._fall_event()
@@ -451,7 +451,7 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
             perturbed_transitions / adv_obs["transition_probas"][:-1].cpu().numpy()
         )
         perturbations = np.nan_to_num(perturbations, nan=1)
-        perturbations = perturbations[perturbed_transitions > 0].tolist()
+        perturbations = [perturbations[idx] for idx in self.state_idxs]
 
         perturbed_transitions = [perturbed_transitions[idx] for idx in self.state_idxs]
 
@@ -486,10 +486,10 @@ class FixedPolicyStochasticDistShift1(StochasticDistShiftEnv):
 
         return new_probas
 
-    def step(self, perturbations):
+    def step(self, old_perturbations):
         self.step_count += 1
 
-        perturbed_probas = self._apply_budget_constraint(perturbations)
+        perturbed_probas = self._apply_budget_constraint(old_perturbations)
         perturbed_probas, perturbations = self._postprocess_transitions(
             perturbed_probas
         )

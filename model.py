@@ -82,10 +82,10 @@ class AdversaryACModel(nn.Module, torch_ac.RecurrentACModel):
     def __init__(
         self,
         env,
-        action_std_init=0.6,
+        action_std_init=0.4,
         device="cuda",
         action_std_decay_rate=0.025,
-        min_action_std=0.3,
+        min_action_std=0.2,
     ):
         super().__init__()
 
@@ -150,6 +150,12 @@ class AdversaryACModel(nn.Module, torch_ac.RecurrentACModel):
 
         dist = self._get_action_dist(embedding, obs.transition_probas[:, :-1], budget)
         perturbations = dist.sample()
+        perturbations = torch.where(
+            perturbations < 0, dist.loc, perturbations
+        )  # Readjust when neg probas
+
+        budget_array = torch.ones_like(dist.loc) * budget
+        perturbations = torch.where(perturbations > budget, budget_array, perturbations)
 
         x = self.critic(embedding)
         value = x.squeeze(1)
