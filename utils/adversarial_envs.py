@@ -173,7 +173,7 @@ class FixedAdversaryStochasticDistShift1(StochasticDistShiftEnv):
         with torch.no_grad():
             perturbations = self.adversary.get_perturbation(adv_obs)
 
-        # Ensure adversary budget is respectedS
+        # Ensure adversary budget is respected
         max_perturbation = perturbations.max()
         old_transitions = adv_obs["transition_probas"][:-1].cpu().numpy()
 
